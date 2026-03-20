@@ -1,18 +1,656 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>My Figma Widget</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Local Calendar</title>
   <style>
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      margin: 0;
-      padding: 16px;
+    :root{
+      --bg:#f5f6f8;
+      --panel:#ffffff;
+      --line:#e6e8ee;
+      --text:#1f2328;
+      --muted:#6b7280;
+      --accent:#2563eb; /* Outlook-ish blue */
+      --accent2:#0ea5e9;
+      --today:#eaf2ff;
+      --shadow:0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06);
+      --radius:14px;
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:var(--font);
+      color:var(--text);
+      background:var(--bg);
+    }
+    .app{
+      max-width:1200px;
+      margin:18px auto;
+      padding:0 14px 18px;
+    }
+    .topbar{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      justify-content:space-between;
+      padding:12px 12px;
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+    }
+    .left, .right{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    button{
+      border:1px solid var(--line);
+      background:#fff;
+      padding:8px 10px;
+      border-radius:10px;
+      cursor:pointer;
+      color:var(--text);
+      font-weight:600;
+    }
+    button:hover{ border-color:#cfd6e6; }
+    button.primary{
+      background:var(--accent);
+      border-color:var(--accent);
+      color:#fff;
+    }
+    button.primary:hover{ filter:brightness(.96); }
+    button.ghost{
+      background:transparent;
+    }
+    .tabs{
+      display:flex;
+      border:1px solid var(--line);
+      border-radius:12px;
+      overflow:hidden;
+    }
+    .tab{
+      border:none;
+      border-right:1px solid var(--line);
+      border-radius:0;
+      padding:8px 12px;
+      background:#fff;
+      font-weight:700;
+    }
+    .tab:last-child{ border-right:none; }
+    .tab.active{
+      background:#eef4ff;
+      color:var(--accent);
+    }
+    .title{
+      font-size:16px;
+      font-weight:800;
+      letter-spacing:.2px;
+      margin-left:6px;
+      white-space:nowrap;
+    }
+    .sub{
+      font-size:12px;
+      color:var(--muted);
+      margin-left:6px;
+      white-space:nowrap;
+    }
+
+    .board{
+      margin-top:12px;
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      overflow:hidden;
+    }
+
+    /* Month grid */
+    .dow{
+      display:grid;
+      grid-template-columns:repeat(7,1fr);
+      background:#fbfbfc;
+      border-bottom:1px solid var(--line);
+    }
+    .dow div{
+      padding:10px 12px;
+      font-size:12px;
+      font-weight:800;
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.8px;
+    }
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(7,1fr);
+      min-height:620px;
+    }
+    .cell{
+      border-right:1px solid var(--line);
+      border-bottom:1px solid var(--line);
+      padding:8px;
+      min-height:110px;
+      position:relative;
+      background:#fff;
+    }
+    .cell:nth-child(7n){ border-right:none; }
+    .cell.out{ background:#fafafa; color:#9aa1ad; }
+    .cell.today{ background:var(--today); }
+    .daynum{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      font-weight:900;
+      font-size:12px;
+      color:inherit;
+      margin-bottom:6px;
+    }
+    .add{
+      border:none;
+      background:transparent;
+      color:var(--muted);
+      font-weight:900;
+      cursor:pointer;
+      padding:2px 6px;
+      border-radius:8px;
+    }
+    .add:hover{ background:#eef2ff; color:var(--accent); }
+    .events{ display:flex; flex-direction:column; gap:6px; }
+    .evt{
+      border-radius:10px;
+      padding:6px 8px;
+      font-size:12px;
+      line-height:1.2;
+      background:#eef4ff;
+      border:1px solid #d9e6ff;
+      cursor:pointer;
+      overflow:hidden;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+    }
+    .evt .t{
+      font-weight:800;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .evt .m{
+      font-weight:800;
+      color:var(--accent);
+      flex:0 0 auto;
+      font-size:11px;
+    }
+    .evt.tag2{ background:#e8fbff; border-color:#c9f4ff; }
+    .evt.tag2 .m{ color:var(--accent2); }
+
+    /* Week/day list view */
+    .list{
+      padding:12px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .lane{
+      border:1px solid var(--line);
+      border-radius:12px;
+      overflow:hidden;
+      background:#fff;
+    }
+    .lanehead{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:10px 12px;
+      background:#fbfbfc;
+      border-bottom:1px solid var(--line);
+      font-weight:900;
+    }
+    .lanehead span{ color:var(--muted); font-weight:800; }
+    .laneitems{ padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+    .empty{ color:var(--muted); font-size:13px; padding:4px 0; }
+
+    /* Modal */
+    dialog{
+      border:none;
+      border-radius:16px;
+      padding:0;
+      width:min(520px, 92vw);
+      box-shadow:0 30px 80px rgba(0,0,0,.25);
+    }
+    .modal{
+      padding:14px;
+    }
+    .modal h3{ margin:6px 4px 10px; }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; }
+    label{ display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:800; color:var(--muted); width:100%; }
+    input, textarea, select{
+      font:inherit;
+      padding:10px 10px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      outline:none;
+    }
+    textarea{ min-height:80px; resize:vertical; }
+    .row > label.half{ width:calc(50% - 5px); }
+    .actions{
+      display:flex;
+      justify-content:space-between;
+      gap:8px;
+      padding:12px 14px 14px;
+      border-top:1px solid var(--line);
+      background:#fff;
+      border-radius:0 0 16px 16px;
+    }
+    .actions .group{ display:flex; gap:8px; }
+    .danger{
+      background:#fff;
+      border-color:#ffd1d1;
+      color:#b91c1c;
+    }
+    .danger:hover{ background:#fff5f5; }
+    .hint{
+      font-size:12px;
+      color:var(--muted);
+      margin:8px 4px 0;
+    }
+    @media (max-width:740px){
+      .grid{ min-height:520px; }
+      .cell{ min-height:92px; }
+      .row > label.half{ width:100%; }
+      .title{ display:none; }
+      .sub{ display:none; }
     }
   </style>
 </head>
-<body>
 
-  <!-- Paste your Figma Make output HERE -->
-  <h1
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="left">
+        <button id="prev" class="ghost">◀</button>
+        <button id="next" class="ghost">▶</button>
+        <button id="todayBtn">Today</button>
+        <div>
+          <div class="title" id="rangeTitle">Calendar</div>
+          <div class="sub" id="rangeSub">Local .html — saved in this browser</div>
+        </div>
+      </div>
+
+      <div class="right">
+        <div class="tabs" role="tablist" aria-label="Views">
+          <button class="tab active" data-view="month">Month</button>
+          <button class="tab" data-view="week">Week</button>
+          <button class="tab" data-view="workweek">Work week</button>
+          <button class="tab" data-view="day">Day</button>
+        </div>
+        <button id="newBtn" class="primary">+ New</button>
+      </div>
+    </div>
+
+    <div class="board" id="board"></div>
+  </div>
+
+  <dialog id="dlg">
+    <form method="dialog">
+      <div class="modal">
+        <h3 id="dlgTitle">New event</h3>
+
+        <label>
+          Title
+          <input id="fTitle" required placeholder="e.g., 1:1 with David" />
+        </label>
+
+        <div class="row">
+          <label class="half">
+            Date
+            <input id="fDate" type="date" required />
+          </label>
+          <label class="half">
+            Time (optional)
+            <input id="fTime" type="time" />
+          </label>
+        </div>
+
+        <div class="row">
+          <label class="half">
+            Tag
+            <select id="fTag">
+              <option value="1">Blue</option>
+              <option value="2">Teal</option>
+            </select>
+          </label>
+          <label class="half">
+            Duration (min)
+            <input id="fDur" type="number" min="0" step="5" value="30" />
+          </label>
+        </div>
+
+        <label>
+          Notes (optional)
+          <textarea id="fNotes" placeholder="Anything you want to remember…"></textarea>
+        </label>
+
+        <div class="hint" id="dlgHint"></div>
+      </div>
+
+      <div class="actions">
+        <button id="deleteBtn" class="danger" type="button" style="visibility:hidden;">Delete</button>
+        <div class="group">
+          <button value="cancel" type="button" id="cancelBtn">Cancel</button>
+          <button value="ok" class="primary" id="saveBtn">Save</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+<script>
+  // ---------- Storage ----------
+  const KEY = "local_calendar_events_v1";
+  const loadEvents = () => {
+    try { return JSON.parse(localStorage.getItem(KEY) || "[]"); }
+    catch { return []; }
+  };
+  const saveEvents = (events) => localStorage.setItem(KEY, JSON.stringify(events));
+
+  // event shape: { id, date:"YYYY-MM-DD", time:"HH:MM"|"", title, notes, tag:"1"|"2", dur:number }
+  let events = loadEvents();
+
+  // ---------- Date helpers ----------
+  const pad = (n) => String(n).padStart(2,"0");
+  const toISODate = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const fromISODate = (s) => {
+    const [y,m,d] = s.split("-").map(Number);
+    return new Date(y, m-1, d);
+  };
+  const sameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  const startOfWeek = (d, monday=true) => {
+    const x = new Date(d);
+    const day = x.getDay(); // 0 Sun
+    const shift = monday ? (day===0 ? -6 : 1-day) : -day;
+    x.setDate(x.getDate()+shift);
+    x.setHours(0,0,0,0);
+    return x;
+  };
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+  const monthName = (d) => d.toLocaleString(undefined,{month:"long", year:"numeric"});
+
+  // ---------- View state ----------
+  let view = "month";
+  let anchor = new Date(); // what month/week/day we’re looking at
+  anchor.setHours(0,0,0,0);
+
+  // ---------- UI elements ----------
+  const board = document.getElementById("board");
+  const rangeTitle = document.getElementById("rangeTitle");
+  const tabs = document.querySelectorAll(".tab");
+  document.getElementById("prev").onclick = () => nav(-1);
+  document.getElementById("next").onclick = () => nav(1);
+  document.getElementById("todayBtn").onclick = () => { anchor = new Date(); anchor.setHours(0,0,0,0); render(); };
+  document.getElementById("newBtn").onclick = () => openEditor({ date: toISODate(anchor) });
+
+  tabs.forEach(t => t.onclick = () => {
+    tabs.forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    view = t.dataset.view;
+    render();
+  });
+
+  // ---------- Navigation ----------
+  function nav(dir){
+    if(view==="month"){
+      anchor = new Date(anchor.getFullYear(), anchor.getMonth()+dir, 1);
+    } else if(view==="week" || view==="workweek"){
+      anchor = addDays(anchor, dir*7);
+    } else { // day
+      anchor = addDays(anchor, dir);
+    }
+    anchor.setHours(0,0,0,0);
+    render();
+  }
+
+  // ---------- Rendering ----------
+  function render(){
+    if(view==="month") renderMonth();
+    else if(view==="week") renderWeek(false);
+    else if(view==="workweek") renderWeek(true);
+    else renderDay();
+  }
+
+  function renderMonth(){
+    const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const start = startOfWeek(first, true);
+    const today = new Date(); today.setHours(0,0,0,0);
+
+    rangeTitle.textContent = monthName(first);
+
+    const dow = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    board.innerHTML = `
+      <div class="dow">${dow.map(d=>`<div>${d}</div>`).join("")}</div>
+      <div class="grid"></div>
+    `;
+    const grid = board.querySelector(".grid");
+
+    for(let i=0;i<42;i++){
+      const day = addDays(start, i);
+      const iso = toISODate(day);
+      const inMonth = day.getMonth() === first.getMonth();
+      const cls = ["cell", inMonth ? "" : "out", sameDay(day,today) ? "today" : ""].join(" ");
+
+      const dayEvents = events
+        .filter(e => e.date === iso)
+        .sort((a,b) => (a.time||"99:99").localeCompare(b.time||"99:99"));
+
+      const evHtml = dayEvents.slice(0,4).map(e => `
+        <div class="evt ${e.tag==="2"?"tag2":""}" data-id="${e.id}" title="${escapeHtml(e.notes||"")}">
+          <div class="t">${escapeHtml(e.title)}</div>
+          <div class="m">${e.time ? e.time : ""}</div>
+        </div>
+      `).join("");
+
+      const more = dayEvents.length>4 ? `<div class="empty">+${dayEvents.length-4} more</div>` : "";
+
+      const cell = document.createElement("div");
+      cell.className = cls;
+      cell.innerHTML = `
+        <div class="daynum">
+          <span>${day.getDate()}</span>
+          <button class="add" title="Add" data-add="${iso}">+</button>
+        </div>
+        <div class="events">${evHtml}${more}</div>
+      `;
+      grid.appendChild(cell);
+    }
+
+    board.querySelectorAll("[data-add]").forEach(btn=>{
+      btn.onclick = (ev)=> openEditor({ date: ev.target.dataset.add });
+    });
+    board.querySelectorAll(".evt").forEach(el=>{
+      el.onclick = ()=> {
+        const id = el.dataset.id;
+        const e = events.find(x=>x.id===id);
+        if(e) openEditor(e);
+      };
+    });
+  }
+
+  function renderWeek(workweek){
+    const s = startOfWeek(anchor, true);
+    const days = workweek ? 5 : 7;
+    const labels = [];
+    for(let i=0;i<days;i++){
+      const d = addDays(s,i);
+      labels.push(d.toLocaleDateString(undefined,{weekday:"long", month:"short", day:"numeric"}));
+    }
+    rangeTitle.textContent = workweek ? "Work week" : "Week";
+
+    const wrap = document.createElement("div");
+    wrap.className = "list";
+
+    for(let i=0;i<days;i++){
+      const d = addDays(s,i);
+      const iso = toISODate(d);
+      const dayEvents = events
+        .filter(e => e.date === iso)
+        .sort((a,b) => (a.time||"99:99").localeCompare(b.time||"99:99"));
+
+      const lane = document.createElement("div");
+      lane.className = "lane";
+      lane.innerHTML = `
+        <div class="lanehead">
+          <div>${labels[i]}</div>
+          <button class="add" data-add="${iso}">+ Add</button>
+        </div>
+        <div class="laneitems">
+          ${dayEvents.length ? dayEvents.map(e=>`
+            <div class="evt ${e.tag==="2"?"tag2":""}" data-id="${e.id}">
+              <div class="t">${escapeHtml(e.title)}</div>
+              <div class="m">${e.time ? e.time : ""}</div>
+            </div>
+          `).join("") : `<div class="empty">No events</div>`}
+        </div>
+      `;
+      wrap.appendChild(lane);
+    }
+
+    board.innerHTML = "";
+    board.appendChild(wrap);
+
+    board.querySelectorAll("[data-add]").forEach(btn=>{
+      btn.onclick = (ev)=> openEditor({ date: ev.target.dataset.add });
+    });
+    board.querySelectorAll(".evt").forEach(el=>{
+      el.onclick = ()=> {
+        const id = el.dataset.id;
+        const e = events.find(x=>x.id===id);
+        if(e) openEditor(e);
+      };
+    });
+  }
+
+  function renderDay(){
+    const d = new Date(anchor);
+    const iso = toISODate(d);
+    rangeTitle.textContent = d.toLocaleDateString(undefined,{weekday:"long", month:"long", day:"numeric", year:"numeric"});
+
+    const dayEvents = events
+      .filter(e => e.date === iso)
+      .sort((a,b) => (a.time||"99:99").localeCompare(b.time||"99:99"));
+
+    board.innerHTML = `
+      <div class="list">
+        <div class="lane">
+          <div class="lanehead">
+            <div>Events</div>
+            <button class="add" data-add="${iso}">+ Add</button>
+          </div>
+          <div class="laneitems">
+            ${dayEvents.length ? dayEvents.map(e=>`
+              <div class="evt ${e.tag==="2"?"tag2":""}" data-id="${e.id}">
+                <div class="t">${escapeHtml(e.title)}</div>
+                <div class="m">${e.time ? e.time : ""}</div>
+              </div>
+            `).join("") : `<div class="empty">No events</div>`}
+          </div>
+        </div>
+      </div>
+    `;
+
+    board.querySelector("[data-add]").onclick = (ev)=> openEditor({ date: ev.target.dataset.add });
+    board.querySelectorAll(".evt").forEach(el=>{
+      el.onclick = ()=> {
+        const id = el.dataset.id;
+        const e = events.find(x=>x.id===id);
+        if(e) openEditor(e);
+      };
+    });
+  }
+
+  // ---------- Modal editor ----------
+  const dlg = document.getElementById("dlg");
+  const fTitle = document.getElementById("fTitle");
+  const fDate  = document.getElementById("fDate");
+  const fTime  = document.getElementById("fTime");
+  const fNotes = document.getElementById("fNotes");
+  const fTag   = document.getElementById("fTag");
+  const fDur   = document.getElementById("fDur");
+  const deleteBtn = document.getElementById("deleteBtn");
+  const cancelBtn = document.getElementById("cancelBtn");
+  const saveBtn = document.getElementById("saveBtn");
+  const dlgTitle = document.getElementById("dlgTitle");
+  const dlgHint = document.getElementById("dlgHint");
+
+  let editingId = null;
+
+  function openEditor(e){
+    editingId = e.id || null;
+    dlgTitle.textContent = editingId ? "Edit event" : "New event";
+    deleteBtn.style.visibility = editingId ? "visible" : "hidden";
+
+    fTitle.value = e.title || "";
+    fDate.value  = e.date || toISODate(anchor);
+    fTime.value  = e.time || "";
+    fNotes.value = e.notes || "";
+    fTag.value   = e.tag || "1";
+    fDur.value   = (e.dur ?? 30);
+
+    dlgHint.textContent = "Tip: everything is stored locally in your browser (LocalStorage).";
+    dlg.showModal();
+    fTitle.focus();
+  }
+
+  cancelBtn.onclick = () => dlg.close();
+
+  deleteBtn.onclick = () => {
+    if(!editingId) return;
+    events = events.filter(x => x.id !== editingId);
+    saveEvents(events);
+    dlg.close();
+    render();
+  };
+
+  saveBtn.onclick = (ev) => {
+    // prevent dialog auto-close until validated
+    ev.preventDefault();
+
+    if(!fTitle.value.trim() || !fDate.value){
+      dlgHint.textContent = "Title and date are required.";
+      return;
+    }
+
+    const payload = {
+      id: editingId || crypto.randomUUID(),
+      title: fTitle.value.trim(),
+      date: fDate.value,
+      time: fTime.value || "",
+      notes: fNotes.value.trim(),
+      tag: fTag.value,
+      dur: Number(fDur.value || 0)
+    };
+
+    if(editingId){
+      events = events.map(x => x.id===editingId ? payload : x);
+    } else {
+      events.push(payload);
+    }
+    saveEvents(events);
+    dlg.close();
+    render();
+  };
+
+  function escapeHtml(s){
+    return (s??"").replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
+  }
+
+  // Boot
+  render();
+</script>
+</body>
+</html>
+``
