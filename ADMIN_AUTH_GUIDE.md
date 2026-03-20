@@ -8,7 +8,7 @@ Your calendar application now has **proper server-side authentication** with:
 - ✅ JWT token-based session management
 - ✅ Protected admin-only endpoints
 - ✅ 7-day token expiration
-- ✅ Automatic token verification on page load
+- ✅ Automatic token verification on page load.
 
 ---
 
