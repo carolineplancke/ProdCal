@@ -106,11 +106,7 @@ export function CalendarView({
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('month');
 
-  /**
-   * ✅ BEST FIX:
-   * Immutable, defensive derivation of events-by-day.
-   * No mutation, no push(), always new references.
-   */
+  // ✅ BEST FIX: immutable, defensive derivation
   const eventsMap = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
 
@@ -246,20 +242,11 @@ export function CalendarView({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Views (unchanged logic, now safe data)                                     */
+/* Views                                                                      */
 /* -------------------------------------------------------------------------- */
 
-function DayView({
-  currentDate,
-  eventsMap,
-  onEventClick,
-  timezone,
-}: {
-  currentDate: Date;
-  eventsMap: Map<string, CalendarEvent[]>;
-  onEventClick: (event: CalendarEvent) => void;
-  timezone: string;
-}) {
+/* Day View */
+function DayView({ currentDate, eventsMap, onEventClick, timezone }: any) {
   const dateKey = format(currentDate, 'yyyy-MM-dd');
   const dayEvents = eventsMap.get(dateKey) ?? [];
   const hours = Array.from({ length: 13 }, (_, i) => i + 7);
@@ -267,7 +254,7 @@ function DayView({
   return (
     <div className="space-y-2">
       {hours.map(hour => {
-        const hourEvents = dayEvents.filter(e => {
+        const hourEvents = dayEvents.filter((e: CalendarEvent) => {
           const t = toZonedTime(new Date(e.start), timezone);
           return t.getHours() === hour;
         });
@@ -277,7 +264,7 @@ function DayView({
             <div className="text-xs text-muted-foreground mb-1">
               {format(new Date().setHours(hour, 0, 0, 0), 'h:mm a')}
             </div>
-            {hourEvents.map(event => {
+            {hourEvents.map((event: CalendarEvent) => {
               const style = getCategoryStyle(event.category);
               return (
                 <button
@@ -296,7 +283,119 @@ function DayView({
   );
 }
 
-/* WeekView, WorkWeekView, MonthView, YearView
-   ✅ unchanged from your original – logic omitted here for brevity
-   ✅ they now receive a correct, reactive eventsMap
-*/
+/* Week View */
+function WeekView({ currentDate, eventsMap, onEventClick, timezone, onTimezoneChange }: any) {
+  const weekStart = startOfWeek(currentDate);
+  const days = eachDayOfInterval({ start: weekStart, end: addDays(weekStart, 6) });
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-7 gap-2">
+        {days.map(day => {
+          const key = format(day, 'yyyy-MM-dd');
+          const events = eventsMap.get(key) ?? [];
+          return (
+            <div key={key} className="border rounded p-2">
+              <div className="text-sm font-medium">{format(day, 'EEE d')}</div>
+              {events.map((event: CalendarEvent) => (
+                <button
+                  key={event.id}
+                  onClick={() => onEventClick(event)}
+                  className="block text-xs mt-1 text-left"
+                >
+                  {event.subject}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* Work Week View */
+function WorkWeekView({ currentDate, eventsMap, onEventClick, timezone }: any) {
+  const weekStart = startOfWeek(currentDate);
+  const days = eachDayOfInterval({ start: weekStart, end: addDays(weekStart, 6) })
+    .filter(d => {
+      const day = getDay(d);
+      return day >= 1 && day <= 5;
+    });
+
+  return (
+    <WeekView
+      currentDate={currentDate}
+      eventsMap={eventsMap}
+      onEventClick={onEventClick}
+      timezone={timezone}
+    />
+  );
+}
+
+/* Month View */
+function MonthView({ currentDate, eventsMap, onEventClick, timezone }: any) {
+  const monthStart = startOfMonth(currentDate);
+  const monthEnd = endOfMonth(currentDate);
+  const calendarStart = startOfWeek(monthStart);
+  const calendarEnd = endOfWeek(monthEnd);
+  const days = eachDayOfInterval({ start: calendarStart, end: calendarEnd });
+
+  return (
+    <div className="grid grid-cols-7 gap-1">
+      {days.map(day => {
+        const key = format(day, 'yyyy-MM-dd');
+        const events = eventsMap.get(key) ?? [];
+        return (
+          <div key={key} className="border rounded p-1 min-h-20">
+            <div className="text-xs font-medium">{format(day, 'd')}</div>
+            {events.slice(0, 3).map((event: CalendarEvent) => (
+              <button
+                key={event.id}
+                onClick={() => onEventClick(event)}
+                className="block text-[10px] truncate"
+              >
+                {event.subject}
+              </button>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Year View */
+function YearView({ currentDate, eventsMap, onEventClick, timezone }: any) {
+  const months = eachMonthOfInterval({
+    start: startOfYear(currentDate),
+    end: endOfYear(currentDate),
+  });
+
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      {months.map(month => {
+        const monthStart = startOfMonth(month);
+        const monthEnd = endOfMonth(month);
+        const days = eachDayOfInterval({
+          start: startOfWeek(monthStart),
+          end: endOfWeek(monthEnd),
+        });
+
+        const count = days.reduce((acc, d) => {
+          const key = format(d, 'yyyy-MM-dd');
+          return acc + (eventsMap.get(key)?.length ?? 0);
+        }, 0);
+
+        return (
+          <div key={month.toISOString()} className="border rounded p-3">
+            <div className="flex justify-between text-sm font-medium mb-2">
+              {format(month, 'MMMM')}
+              {count > 0 && <Badge variant="secondary">{count}</Badge>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
