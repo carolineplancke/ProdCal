@@ -447,7 +447,7 @@ app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async
       recurrence_pattern: recurrencePattern || null,
       series_id: seriesId || null,
       is_cancelled: toBool(isCancelled),
-      category: category || 'General', // Default to General if not specified
+      category: category || seriesCategory || 'General',
       import_source: 'email', // Track that this came from email import
       email_subject: emailSubject || '',
       imported_at: new Date().toISOString()
@@ -569,7 +569,7 @@ app.post('/make-server-832943b5/events', validateApiKey, async (c) => {
       recurrence_pattern: recurrencePattern || null,
       series_id: seriesId || null,
       is_cancelled: toBool(isCancelled),
-      category: category || '',
+      category: category || seriesCategory || 'General',
       seriesCategory: seriesCategory || '',
       import_source: 'powerautomate'
     };
@@ -625,14 +625,15 @@ app.post('/make-server-832943b5/events', validateApiKey, async (c) => {
 // Get all events
 app.get('/make-server-832943b5/events', async (c) => {
   try {
-    console.log('[GET /events] Starting request');
-    console.log('[GET /events] Supabase URL:', supabaseUrl);
-    console.log('[GET /events] Service key present:', !!supabaseServiceKey);
+c.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+c.header('Pragma', 'no-cache');
+c.header('Expires', '0');
+
     
     const { data, error } = await supabase
       .from('events')
       .select('*')
-      .eq('is_cancelled', false)
+      .or('is_cancelled.eq.false,is_cancelled.is.null')
       .order('start', { ascending: true });
 
     if (error) {
