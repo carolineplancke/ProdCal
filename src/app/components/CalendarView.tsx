@@ -677,3 +677,4 @@ function YearView({ currentDate, eventsMap, onEventClick, timezone }: {
     </div>
   );
 }
+console.log('CalendarView events length:', events.length);
