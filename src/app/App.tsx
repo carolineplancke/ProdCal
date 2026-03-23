@@ -97,7 +97,13 @@ export default function App() {
         setError(null);
       }
 
-      const response = await fetch(`${API_BASE}/events`);
+      
+  const response = await fetch(`${API_BASE}/events`, {
+    headers: {
+      Authorization: `Bearer ${publicAnonKey}`,
+    },
+  });
+
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
