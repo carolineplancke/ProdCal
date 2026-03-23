@@ -91,8 +91,9 @@ async function verifyToken(token: string, secret: string): Promise<any> {
     console.log('[verifyToken] Token verification successful!');
     return payload;
   } catch (error) {
-    console.log('[verifyToken] ERROR during verification:', error.message);
-    console.log('[verifyToken] ERROR stack:', error.stack);
+    const err = error as Error;
+    console.log('[verifyToken] ERROR during verification:', err.message);
+    console.log('[verifyToken] ERROR stack:', err.stack);
     throw error;
   }
 }
@@ -124,27 +125,6 @@ function dbToApi(dbEvent: any) {
 }
 
 // Helper: Convert API camelCase to database snake_case
-function apiToDb(apiEvent: any) {
-  return {
-    id: apiEvent.id,
-    subject: apiEvent.subject,
-    start: apiEvent.start,
-    end: apiEvent.end,
-    location: apiEvent.location || '',
-    description: apiEvent.description || '',
-    attendees: apiEvent.attendees || [],
-    organizer: apiEvent.organizer || '',
-    is_recurring: apiEvent.isRecurring || false,
-    recurrence_pattern: apiEvent.recurrencePattern || null,
-    series_id: apiEvent.seriesId || null,
-    is_cancelled: apiEvent.isCancelled || false,
-    category: apiEvent.category || '',
-    seriesCatefory: apiEvent.seriesCategory || false,
-    import_source: apiEvent.importSource || 'powerautomate',
-    email_subject: apiEvent.emailSubject || null,
-    imported_at: apiEvent.importedAt || null
-  };
-}
 
 const app = new Hono();
 
@@ -161,7 +141,7 @@ app.use('*', cors({
 }));
 
 // Middleware to validate API key for write operations
-const validateApiKey = async (c: any, next: any) => {
+const validateApiKey = async (c: any, next: () => Promise<any>) => {
   const apiKey = c.req.header('X-API-Key');
   const storedKey = await kv.get('config:api_key');
   
@@ -178,7 +158,7 @@ const validateApiKey = async (c: any, next: any) => {
 };
 
 // Health check
-app.get('/make-server-832943b5/health', async (c) => {
+app.get('/make-server-832943b5/health', async (c: any) => {
   // Check database connection
   const { error } = await supabase.from('events').select('id').limit(1);
   
@@ -190,7 +170,7 @@ app.get('/make-server-832943b5/health', async (c) => {
 });
 
 // Set or update API key (only call this once to set your key)
-app.post('/make-server-832943b5/config/api-key', async (c) => {
+app.post('/make-server-832943b5/config/api-key', async (c: any) => {
   try {
     const body = await c.req.json();
     const { apiKey } = body;
@@ -204,15 +184,16 @@ app.post('/make-server-832943b5/config/api-key', async (c) => {
     await kv.set('config:api_key', apiKey);
     return c.json({ success: true, message: 'API key configured successfully' });
   } catch (error) {
-    console.log('Error setting API key:', error);
+    const err = error as Error;
+    console.log('Error setting API key:', err);
     return c.json({ 
-      error: `Failed to set API key: ${error.message}` 
+      error: `Failed to set API key: ${err.message}` 
     }, 500);
   }
 });
 
 // Get API key status (doesn't return the actual key)
-app.get('/make-server-832943b5/config/api-key', async (c) => {
+app.get('/make-server-832943b5/config/api-key', async (c: any) => {
   try {
     const storedKey = await kv.get('config:api_key');
     return c.json({ 
@@ -220,9 +201,10 @@ app.get('/make-server-832943b5/config/api-key', async (c) => {
       message: storedKey ? 'API key is configured' : 'No API key set'
     });
   } catch (error) {
-    console.log('Error checking API key:', error);
+    const err = error as Error;
+    console.log('Error checking API key:', err);
     return c.json({ 
-      error: `Failed to check API key: ${error.message}` 
+      error: `Failed to check API key: ${err.message}` 
     }, 500);
   }
 });
@@ -232,7 +214,7 @@ app.get('/make-server-832943b5/config/api-key', async (c) => {
 // ============================================================================
 
 // Admin login - verify password and return JWT token
-app.post('/make-server-832943b5/auth/login', async (c) => {
+app.post('/make-server-832943b5/auth/login', async (c: any) => {
   try {
     const body = await c.req.json();
     const { password } = body;
@@ -274,15 +256,16 @@ app.post('/make-server-832943b5/auth/login', async (c) => {
       message: 'Login successful' 
     });
   } catch (error) {
-    console.log('Error during admin login:', error);
+    const err = error as Error;
+    console.log('Error during admin login:', err);
     return c.json({ 
-      error: `Login failed: ${error.message}` 
+      error: `Login failed: ${err.message}` 
     }, 500);
   }
 });
 
 // Verify admin token
-app.post('/make-server-832943b5/auth/verify', async (c) => {
+app.post('/make-server-832943b5/auth/verify', async (c: any) => {
   try {
     const body = await c.req.json();
     const { token } = body;
@@ -314,15 +297,17 @@ app.post('/make-server-832943b5/auth/verify', async (c) => {
         message: 'Token is valid' 
       });
     } catch (verifyError) {
-      console.log('[auth/verify] Verify function threw error:', verifyError);
-      console.log('[auth/verify] Error type:', verifyError.constructor.name);
-      console.log('[auth/verify] Error message:', verifyError.message);
-      console.log('[auth/verify] Error stack:', verifyError.stack);
-      throw verifyError;
+      const err = verifyError as Error;
+      console.log('[auth/verify] Verify function threw error:', err);
+      console.log('[auth/verify] Error type:', err.constructor.name);
+      console.log('[auth/verify] Error message:', err.message);
+      console.log('[auth/verify] Error stack:', err.stack);
+      throw err;
     }
   } catch (error) {
-    console.log('[auth/verify] Token verification failed:', error);
-    console.log('[auth/verify] Error message:', error.message);
+    const err = error as Error;
+    console.log('[auth/verify] Token verification failed:', err);
+    console.log('[auth/verify] Error message:', err.message);
     return c.json({ 
       error: 'Invalid or expired token' 
     }, 401);
@@ -330,7 +315,7 @@ app.post('/make-server-832943b5/auth/verify', async (c) => {
 });
 
 // Middleware to validate admin token for protected routes
-const validateAdminToken = async (c: any, next: any) => {
+const validateAdminToken = async (c: any, next: () => Promise<any>) => {
   console.log('[validateAdminToken] Request:', c.req.method, c.req.url);
   
   const adminToken = c.req.header('X-Admin-Token');
@@ -362,11 +347,12 @@ const validateAdminToken = async (c: any, next: any) => {
     console.log('[validateAdminToken] SUCCESS: Admin token validated, proceeding...');
     return next();
   } catch (error) {
+    const err = error as Error;
     console.log('[validateAdminToken] ERROR: Token validation failed');
-    console.log('[validateAdminToken] Error type:', error.constructor.name);
-    console.log('[validateAdminToken] Error message:', error.message);
-    console.log('[validateAdminToken] Error stack:', error.stack);
-    return c.json({ error: `Invalid or expired token: ${error.message}` }, 401);
+    console.log('[validateAdminToken] Error type:', err.constructor.name);
+    console.log('[validateAdminToken] Error message:', err.message);
+    console.log('[validateAdminToken] Error stack:', err.stack);
+    return c.json({ error: `Invalid or expired token: ${err.message}` }, 401);
   }
 };
 
@@ -379,7 +365,7 @@ const validateAdminToken = async (c: any, next: any) => {
 // ============================================================================
 
 // Import events from forwarded calendar invites via Power Automate
-app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async (c) => {
+app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async (c: any) => {
   try {
     const body = await c.req.json();
     console.log('Received email import request:', JSON.stringify(body, null, 2));
@@ -400,7 +386,6 @@ app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async
       category,
       // Additional fields from email parsing
       emailSubject,
-      emailBody,
       emailFrom,
       seriesCategory,
     } = body;
@@ -495,10 +480,11 @@ app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async
       importedAt: eventData.imported_at
     });
   } catch (error) {
-    console.log('Error importing event from email:', error);
-    console.log('Error stack:', error.stack);
+    const err = error as Error;
+    console.log('Error importing event from email:', err);
+    console.log('Error stack:', err.stack);
     return c.json({ 
-      error: `Failed to import event from email: ${error.message}` 
+      error: `Failed to import event from email: ${err.message}` 
     }, 500);
   }
 });
@@ -508,7 +494,7 @@ app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async
 // ============================================================================
 
 // Add or update a calendar event from Power Automate
-app.post('/make-server-832943b5/events', validateApiKey, async (c) => {
+app.post('/make-server-832943b5/events', validateApiKey, async (c: any) => {
   try {
     const body = await c.req.json();
     console.log('Received event POST request:', JSON.stringify(body, null, 2));
@@ -614,23 +600,24 @@ app.post('/make-server-832943b5/events', validateApiKey, async (c) => {
       message: 'Event created successfully' 
     });
   } catch (error) {
-    console.log('Error creating/updating event:', error);
-    console.log('Error stack:', error.stack);
+    const err = error as Error;
+    console.log('Error creating/updating event:', err);
+    console.log('Error stack:', err.stack);
     return c.json({ 
-      error: `Failed to create/update event: ${error.message}` 
+      error: `Failed to create/update event: ${err.message}` 
     }, 500);
   }
 });
 
 // Get all events
-app.get('/make-server-832943b5/events', async (c) => {
+app.get('/make-server-832943b5/events', async (c: any) => {
   try {
 c.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
 c.header('Pragma', 'no-cache');
 c.header('Expires', '0');
 
     
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('events')
       .select('*')
       .or('is_cancelled.eq.false,is_cancelled.is.null')
@@ -681,18 +668,19 @@ c.header('Expires', '0');
 
     return c.json({ events });
   } catch (error) {
-    console.log('[GET /events] Exception caught:', error);
-    console.log('[GET /events] Error message:', error.message);
-    console.log('[GET /events] Error stack:', error.stack);
+    const err = error as Error;
+    console.log('[GET /events] Exception caught:', err);
+    console.log('[GET /events] Error message:', err.message);
+    console.log('[GET /events] Error stack:', err.stack);
     return c.json({ 
-      error: `Failed to fetch events: ${error.message}`,
-      stack: error.stack
+      error: `Failed to fetch events: ${err.message}`,
+      stack: err.stack
     }, 500);
   }
 });
 
 // Get a specific event
-app.get('/make-server-832943b5/events/:id', async (c) => {
+app.get('/make-server-832943b5/events/:id', async (c: any) => {
   try {
     const id = c.req.param('id');
     console.log('Fetching event:', id);
@@ -715,15 +703,16 @@ app.get('/make-server-832943b5/events/:id', async (c) => {
 
     return c.json({ event: dbToApi(data) });
   } catch (error) {
-    console.log('Error fetching event:', error);
+    const err = error as Error;
+    console.log('Error fetching event:', err);
     return c.json({ 
-      error: `Failed to fetch event: ${error.message}` 
+      error: `Failed to fetch event: ${err.message}` 
     }, 500);
   }
 });
 
 // Delete an event (or mark as cancelled) - ADMIN ONLY
-app.delete('/make-server-832943b5/events/:id', validateAdminToken, async (c) => {
+app.delete('/make-server-832943b5/events/:id', validateAdminToken, async (c: any) => {
   try {
     const id = c.req.param('id');
     console.log('Marking event as cancelled:', id);
@@ -749,15 +738,16 @@ app.delete('/make-server-832943b5/events/:id', validateAdminToken, async (c) => 
     console.log('Event cancelled successfully:', id);
     return c.json({ success: true, message: 'Event cancelled' });
   } catch (error) {
-    console.log('Error cancelling event:', error);
+    const err = error as Error;
+    console.log('Error cancelling event:', err);
     return c.json({ 
-      error: `Failed to cancel event: ${error.message}` 
+      error: `Failed to cancel event: ${err.message}` 
     }, 500);
   }
 });
 
 // Update event category - ADMIN ONLY
-app.patch('/make-server-832943b5/events/:id/category', validateAdminToken, async (c) => {
+app.patch('/make-server-832943b5/events/:id/category', validateAdminToken, async (c: any) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -789,15 +779,16 @@ app.patch('/make-server-832943b5/events/:id/category', validateAdminToken, async
       message: 'Category updated successfully' 
     });
   } catch (error) {
-    console.log('Error updating event category:', error);
+    const err = error as Error;
+    console.log('Error updating event category:', err);
     return c.json({ 
-      error: `Failed to update event category: ${error.message}` 
+      error: `Failed to update event category: ${err.message}` 
     }, 500);
   }
 });
 
 // Get events by series
-app.get('/make-server-832943b5/series/:seriesId/events', async (c) => {
+app.get('/make-server-832943b5/series/:seriesId/events', async (c: any) => {
   try {
     const seriesId = c.req.param('seriesId');
     console.log('Fetching events for series:', seriesId);
@@ -819,9 +810,10 @@ app.get('/make-server-832943b5/series/:seriesId/events', async (c) => {
     const events = data.map(dbToApi);
     return c.json({ events });
   } catch (error) {
-    console.log('Error fetching series events:', error);
+    const err = error as Error;
+    console.log('Error fetching series events:', err);
     return c.json({ 
-      error: `Failed to fetch series events: ${error.message}` 
+      error: `Failed to fetch series events: ${err.message}` 
     }, 500);
   }
 });
@@ -831,7 +823,7 @@ app.get('/make-server-832943b5/series/:seriesId/events', async (c) => {
 // ============================================================================
 
 // Migrate data from KV store to Supabase database - ADMIN ONLY
-app.post('/make-server-832943b5/migrate/kv-to-database', validateAdminToken, async (c) => {
+app.post('/make-server-832943b5/migrate/kv-to-database', validateAdminToken, async (c: any) => {
   try {
     console.log('Starting KV to database migration...');
     
@@ -877,9 +869,10 @@ app.post('/make-server-832943b5/migrate/kv-to-database', validateAdminToken, asy
           console.log('Migrated event:', event.id);
         }
       } catch (err) {
-        console.log('Exception migrating event:', event.id, err.message);
+        const e = err as Error;
+        console.log('Exception migrating event:', event.id, e.message);
         errorCount++;
-        errors.push({ id: event.id, error: err.message });
+        errors.push({ id: event.id, error: e.message });
       }
     }
     
@@ -893,15 +886,16 @@ app.post('/make-server-832943b5/migrate/kv-to-database', validateAdminToken, asy
       errors: errors.length > 0 ? errors : undefined
     });
   } catch (error) {
-    console.log('Error during migration:', error);
+    const err = error as Error;
+    console.log('Error during migration:', err);
     return c.json({
-      error: `Migration failed: ${error.message}`
+      error: `Migration failed: ${err.message}`
     }, 500);
   }
 });
 
 // Fix existing events with string booleans (legacy endpoint, now runs on database)
-app.post('/make-server-832943b5/migrate/fix-booleans', async (c) => {
+app.post('/make-server-832943b5/migrate/fix-booleans', async (c: any) => {
   try {
     // This endpoint is now deprecated since database handles types correctly
     return c.json({ 
@@ -910,9 +904,10 @@ app.post('/make-server-832943b5/migrate/fix-booleans', async (c) => {
       note: 'This endpoint is deprecated. The database handles boolean types correctly.'
     });
   } catch (error) {
-    console.log('Error in migration endpoint:', error);
+    const err = error as Error;
+    console.log('Error in migration endpoint:', err);
     return c.json({ 
-      error: `Migration endpoint error: ${error.message}` 
+      error: `Migration endpoint error: ${err.message}` 
     }, 500);
   }
 });
