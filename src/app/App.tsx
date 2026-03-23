@@ -51,7 +51,7 @@ export default function App() {
     new Set(EVENT_CATEGORIES.map(c => c.id))
   );
 
-  const apiUrl = `https://${projectId}.supabase.co/functions/v1/make-server-832943b5`;
+  const apiUrl = `https://ejugsbtrkjiduczvakpy.supabase.co`;
 
   // Filter events by selected categories
   const filteredEvents = events.filter(event => 
