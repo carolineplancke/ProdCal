@@ -1,104 +1,101 @@
-import { Hono } from 'npm:hono';
-import { cors } from 'npm:hono/cors';
-import { logger } from 'npm:hono/logger';
-import { createClient } from 'npm:@supabase/supabase-js@2';
-import * as kv from './kv_store.tsx'; // Keep for API key storage only
 
-// Simple token creation and verification using HMAC
+import { Hono } from "npm:hono";
+import { cors } from "npm:hono/cors";
+import { logger } from "npm:hono/logger";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import * as kv from "./kv_store.tsx"; // Keep for API key storage only
+
+const BASE = "/make-server-832943b5";
+
+function requireEnv(name: string): string {
+  const v = Deno.env.get(name);
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+// Supabase (service role is OK inside Edge Function; never expose to client)
+const supabase = createClient(
+  requireEnv("SUPABASE_URL"),
+  requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+);
+
+const app = new Hono();
+
+app.use("*", logger());
+app.use(
+  "*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-Admin-Token"],
+    allowMethods: ["POST", "GET", "OPTIONS", "DELETE", "PUT", "PATCH"],
+  }),
+);
+
+// ------------------------------
+// Token helpers (HMAC, simple)
+// ------------------------------
+function base64urlEncode(str: string): string {
+  return btoa(str).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function base64urlDecode(b64url: string): string {
+  let b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  // pad
+  while (b64.length % 4) b64 += "=";
+  return atob(b64);
+}
+
+async function hmacKey(secret: string, usage: "sign" | "verify") {
+  const encoder = new TextEncoder();
+  return crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    [usage],
+  );
+}
+
 async function createToken(payload: any, secret: string): Promise<string> {
   const encoder = new TextEncoder();
-  const data = JSON.stringify(payload);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
-  const signatureHex = Array.from(new Uint8Array(signature))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-  
-  // Return base64url encoded token: payload.signature
-  const payloadB64 = btoa(data).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  return `${payloadB64}.${signatureHex}`;
+  const payloadJson = JSON.stringify(payload);
+  const key = await hmacKey(secret, "sign");
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(payloadJson));
+  const sigHex = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `${base64urlEncode(payloadJson)}.${sigHex}`;
 }
 
 async function verifyToken(token: string, secret: string): Promise<any> {
-  console.log('[verifyToken] Starting verification...');
-  console.log('[verifyToken] Token length:', token.length);
-  console.log('[verifyToken] Token (first 50 chars):', token.substring(0, 50));
-  
-  const parts = token.split('.');
-  console.log('[verifyToken] Token parts count:', parts.length);
-  
-  const [payloadB64, signatureHex] = parts;
-  if (!payloadB64 || !signatureHex) {
-    console.log('[verifyToken] ERROR: Missing parts - payloadB64:', !!payloadB64, 'signatureHex:', !!signatureHex);
-    throw new Error('Invalid token format');
+  const [payloadB64, signatureHex] = token.split(".");
+  if (!payloadB64 || !signatureHex) throw new Error("Invalid token format");
+
+  const payloadJson = base64urlDecode(payloadB64);
+  const payload = JSON.parse(payloadJson);
+
+  const signatureMatch = signatureHex.match(/.{2}/g);
+  if (!signatureMatch) throw new Error("Invalid signature format");
+  const signatureBytes = new Uint8Array(signatureMatch.map((h) => parseInt(h, 16)));
+
+  const encoder = new TextEncoder();
+  const key = await hmacKey(secret, "verify");
+  const ok = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    signatureBytes,
+    encoder.encode(payloadJson),
+  );
+  if (!ok) throw new Error("Invalid token signature");
+
+  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+    throw new Error("Token expired");
   }
-  
-  console.log('[verifyToken] PayloadB64 length:', payloadB64.length);
-  console.log('[verifyToken] SignatureHex length:', signatureHex.length);
-  
-  try {
-    // Decode payload
-    const payloadJson = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'));
-    console.log('[verifyToken] Decoded payload JSON:', payloadJson);
-    const payload = JSON.parse(payloadJson);
-    console.log('[verifyToken] Parsed payload:', payload);
-    
-    // Verify signature
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
-    console.log('[verifyToken] Crypto key imported');
-    
-    const signatureMatch = signatureHex.match(/.{2}/g);
-    if (!signatureMatch) {
-      console.log('[verifyToken] ERROR: Failed to parse signature hex');
-      throw new Error('Invalid signature format');
-    }
-    
-    const signatureBytes = new Uint8Array(signatureMatch.map(byte => parseInt(byte, 16)));
-    console.log('[verifyToken] Signature bytes length:', signatureBytes.length);
-    
-    const isValid = await crypto.subtle.verify(
-      'HMAC',
-      key,
-      signatureBytes,
-      encoder.encode(payloadJson)
-    );
-    console.log('[verifyToken] Signature valid:', isValid);
-    
-    if (!isValid) {
-      console.log('[verifyToken] ERROR: Invalid token signature');
-      throw new Error('Invalid token signature');
-    }
-    
-    // Check expiration
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      console.log('[verifyToken] ERROR: Token expired. Exp:', payload.exp, 'Now:', Math.floor(Date.now() / 1000));
-      throw new Error('Token expired');
-    }
-    
-    console.log('[verifyToken] Token verification successful!');
-    return payload;
-  } catch (error) {
-    const err = error as Error;
-    console.log('[verifyToken] ERROR during verification:', err.message);
-    console.log('[verifyToken] ERROR stack:', err.stack);
-    throw error;
-  }
+  return payload;
 }
 
-// Helper: Convert database snake_case to API camelCase
+// ------------------------------
+// Mapping helpers
+// ------------------------------
 function dbToApi(dbEvent: any) {
   if (!dbEvent) return null;
   return {
@@ -120,796 +117,303 @@ function dbToApi(dbEvent: any) {
     createdAt: dbEvent.created_at,
     importedAt: dbEvent.imported_at,
     updatedAt: dbEvent.updated_at,
-    seriesCategory: dbEvent.series_category
+    seriesCategory: dbEvent.series_category,
   };
 }
 
-// Helper: Convert API camelCase to database snake_case
+const toBool = (value: any): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return !!value;
+};
 
-const app = new Hono();
+const ensureUTC = (dateString: string): string => {
+  if (!dateString) return dateString;
+  // if has Z or an offset like +02:00, leave it alone
+  if (dateString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(dateString)) return dateString;
+  // trim trailing .000000 etc
+  const cleaned = dateString.replace(/\.0+$/, "");
+  return `${cleaned}Z`;
+};
 
-// Initialize Supabase client with service role key for full access
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-app.use('*', logger(console.log));
-app.use('*', cors({
-  origin: '*',
-  allowHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Admin-Token'],
-  allowMethods: ['POST', 'GET', 'OPTIONS', 'DELETE', 'PUT', 'PATCH'],
-}));
-
-// Middleware to validate API key for write operations
+// ------------------------------
+// Auth middleware
+// ------------------------------
 const validateApiKey = async (c: any, next: () => Promise<any>) => {
-  const apiKey = c.req.header('X-API-Key');
-  const storedKey = await kv.get('config:api_key');
-  
-  // If no API key is set yet, allow the request (for initial setup)
-  if (!storedKey) {
-    return next();
-  }
-  
+  const storedKey = await kv.get("config:api_key");
+  if (!storedKey) return next(); // initial setup mode
+
+  const apiKey = c.req.header("X-API-Key");
   if (!apiKey || apiKey !== storedKey) {
-    return c.json({ error: 'Invalid or missing API key' }, 401);
+    return c.json({ error: "Invalid or missing API key" }, 401);
   }
-  
   return next();
 };
 
-// Health check
-app.get('/make-server-832943b5/health', async (c: any) => {
-  // Check database connection
-  const { error } = await supabase.from('events').select('id').limit(1);
-  
-  return c.json({ 
-    status: error ? 'unhealthy' : 'healthy', 
-    timestamp: new Date().toISOString(),
-    database: error ? 'disconnected' : 'connected'
-  });
-});
+function adminSecret(): string {
+  // separate secret from password
+  return requireEnv("ADMIN_JWT_SECRET");
+}
 
-// Set or update API key (only call this once to set your key)
-app.post('/make-server-832943b5/config/api-key', async (c: any) => {
-  try {
-    const body = await c.req.json();
-    const { apiKey } = body;
-
-    if (!apiKey || apiKey.length < 16) {
-      return c.json({ 
-        error: 'API key must be at least 16 characters long' 
-      }, 400);
-    }
-
-    await kv.set('config:api_key', apiKey);
-    return c.json({ success: true, message: 'API key configured successfully' });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error setting API key:', err);
-    return c.json({ 
-      error: `Failed to set API key: ${err.message}` 
-    }, 500);
-  }
-});
-
-// Get API key status (doesn't return the actual key)
-app.get('/make-server-832943b5/config/api-key', async (c: any) => {
-  try {
-    const storedKey = await kv.get('config:api_key');
-    return c.json({ 
-      configured: !!storedKey,
-      message: storedKey ? 'API key is configured' : 'No API key set'
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error checking API key:', err);
-    return c.json({ 
-      error: `Failed to check API key: ${err.message}` 
-    }, 500);
-  }
-});
-
-// ============================================================================
-// ADMIN AUTHENTICATION ENDPOINTS
-// ============================================================================
-
-// Admin login - verify password and return JWT token
-app.post('/make-server-832943b5/auth/login', async (c: any) => {
-  try {
-    const body = await c.req.json();
-    const { password } = body;
-
-    // Get admin password from environment variable
-    const adminPassword = Deno.env.get('ADMIN_PASSWORD');
-
-    if (!adminPassword) {
-      console.log('ADMIN_PASSWORD environment variable not set');
-      return c.json({ 
-        error: 'Admin authentication not configured. Please set ADMIN_PASSWORD environment variable.' 
-      }, 500);
-    }
-
-    // Verify password
-    if (password !== adminPassword) {
-      console.log('Invalid admin password attempt');
-      return c.json({ error: 'Invalid password' }, 401);
-    }
-
-    // TEMPORARY: Use a hardcoded secret for debugging
-    const secret = 'hardcoded-test-secret-12345';
-    const payload = {
-      role: 'admin',
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24 * 7), // 7 days
-    };
-    
-    console.log('Creating JWT token with payload:', payload);
-    console.log('Using HARDCODED secret for testing');
-    
-    const token = await createToken(payload, secret);
-
-    console.log('Admin login successful, token generated (first 30 chars):', token.substring(0, 30) + '...');
-    console.log('Token length:', token.length);
-    return c.json({ 
-      success: true, 
-      token,
-      message: 'Login successful' 
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error during admin login:', err);
-    return c.json({ 
-      error: `Login failed: ${err.message}` 
-    }, 500);
-  }
-});
-
-// Verify admin token
-app.post('/make-server-832943b5/auth/verify', async (c: any) => {
-  try {
-    const body = await c.req.json();
-    const { token } = body;
-
-    console.log('[auth/verify] Verifying token (first 30 chars):', token ? token.substring(0, 30) + '...' : 'null');
-
-    if (!token) {
-      console.log('[auth/verify] No token provided');
-      return c.json({ error: 'No token provided' }, 401);
-    }
-
-    // TEMPORARY: Use hardcoded secret for debugging
-    const secret = 'hardcoded-test-secret-12345';
-    console.log('[auth/verify] Using HARDCODED secret for testing');
-    
-    try {
-      const payload = await verifyToken(token, secret);
-      console.log('[auth/verify] Token verified, payload:', payload);
-
-      if (payload.role !== 'admin') {
-        console.log('[auth/verify] Invalid role:', payload.role);
-        return c.json({ error: 'Invalid token' }, 401);
-      }
-
-      console.log('[auth/verify] Token is valid');
-      return c.json({ 
-        success: true, 
-        isAdmin: true,
-        message: 'Token is valid' 
-      });
-    } catch (verifyError) {
-      const err = verifyError as Error;
-      console.log('[auth/verify] Verify function threw error:', err);
-      console.log('[auth/verify] Error type:', err.constructor.name);
-      console.log('[auth/verify] Error message:', err.message);
-      console.log('[auth/verify] Error stack:', err.stack);
-      throw err;
-    }
-  } catch (error) {
-    const err = error as Error;
-    console.log('[auth/verify] Token verification failed:', err);
-    console.log('[auth/verify] Error message:', err.message);
-    return c.json({ 
-      error: 'Invalid or expired token' 
-    }, 401);
-  }
-});
-
-// Middleware to validate admin token for protected routes
 const validateAdminToken = async (c: any, next: () => Promise<any>) => {
-  console.log('[validateAdminToken] Request:', c.req.method, c.req.url);
-  
-  const adminToken = c.req.header('X-Admin-Token');
-  console.log('[validateAdminToken] X-Admin-Token header present:', !!adminToken);
-  
-  if (!adminToken) {
-    console.log('[validateAdminToken] ERROR: No X-Admin-Token header provided');
-    return c.json({ error: 'Admin authentication required' }, 401);
-  }
-  
-  console.log('[validateAdminToken] Token extracted (first 30 chars):', adminToken.substring(0, 30) + '...');
-  console.log('[validateAdminToken] Token length:', adminToken.length);
-  
+  const token = c.req.header("X-Admin-Token");
+  if (!token) return c.json({ error: "Admin authentication required" }, 401);
+
   try {
-    // TEMPORARY: Use hardcoded secret for debugging
-    const secret = 'hardcoded-test-secret-12345';
-    console.log('[validateAdminToken] Using HARDCODED secret for testing');
-    console.log('[validateAdminToken] Attempting to verify JWT token...');
-    
-    const payload = await verifyToken(adminToken, secret);
-    console.log('[validateAdminToken] Token verified successfully!');
-    console.log('[validateAdminToken] Payload:', JSON.stringify(payload, null, 2));
-
-    if (payload.role !== 'admin') {
-      console.log('[validateAdminToken] ERROR: Token role is not "admin", got:', payload.role);
-      return c.json({ error: 'Insufficient permissions' }, 403);
-    }
-
-    console.log('[validateAdminToken] SUCCESS: Admin token validated, proceeding...');
+    const payload = await verifyToken(token, adminSecret());
+    if (payload.role !== "admin") return c.json({ error: "Insufficient permissions" }, 403);
     return next();
-  } catch (error) {
-    const err = error as Error;
-    console.log('[validateAdminToken] ERROR: Token validation failed');
-    console.log('[validateAdminToken] Error type:', err.constructor.name);
-    console.log('[validateAdminToken] Error message:', err.message);
-    console.log('[validateAdminToken] Error stack:', err.stack);
-    return c.json({ error: `Invalid or expired token: ${err.message}` }, 401);
+  } catch (e) {
+    return c.json({ error: "Invalid or expired token" }, 401);
   }
 };
 
-// ============================================================================
-// END ADMIN AUTHENTICATION
-// ============================================================================
+// ------------------------------
+// Routes
+// ------------------------------
+app.get(`${BASE}/health`, async (c) => {
+  const { error } = await supabase.from("events").select("id").limit(1);
+  return c.json({
+    status: error ? "unhealthy" : "healthy",
+    timestamp: new Date().toISOString(),
+    database: error ? "disconnected" : "connected",
+  });
+});
 
-// ============================================================================
-// EMAIL IMPORT ENDPOINT (for Power Automate email triggers)
-// ============================================================================
+// API key config: allow only if not set yet; otherwise require admin
+app.post(`${BASE}/config/api-key`, async (c) => {
+  const existing = await kv.get("config:api_key");
+  if (existing) {
+    // require admin to rotate
+    const adminToken = c.req.header("X-Admin-Token");
+    if (!adminToken) return c.json({ error: "Admin authentication required to rotate API key" }, 401);
+    await verifyToken(adminToken, adminSecret());
+  }
 
-// Import events from forwarded calendar invites via Power Automate
-app.post('/make-server-832943b5/events/import-from-email', validateApiKey, async (c: any) => {
+  const { apiKey } = await c.req.json();
+  if (!apiKey || apiKey.length < 16) {
+    return c.json({ error: "API key must be at least 16 characters long" }, 400);
+  }
+  await kv.set("config:api_key", apiKey);
+  return c.json({ success: true, message: existing ? "API key rotated" : "API key configured" });
+});
+
+app.get(`${BASE}/config/api-key`, async (c) => {
+  const storedKey = await kv.get("config:api_key");
+  return c.json({
+    configured: !!storedKey,
+    message: storedKey ? "API key is configured" : "No API key set",
+  });
+});
+
+// Admin login
+app.post(`${BASE}/auth/login`, async (c) => {
+  const { password } = await c.req.json();
+  const adminPassword = requireEnv("ADMIN_PASSWORD");
+
+  if (password !== adminPassword) return c.json({ error: "Invalid password" }, 401);
+
+  const payload = {
+    role: "admin",
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7,
+  };
+  const token = await createToken(payload, adminSecret());
+  return c.json({ success: true, token, message: "Login successful" });
+});
+
+app.post(`${BASE}/auth/verify`, async (c) => {
+  const { token } = await c.req.json();
+  if (!token) return c.json({ error: "No token provided" }, 401);
   try {
-    const body = await c.req.json();
-    console.log('Received email import request:', JSON.stringify(body, null, 2));
-    
-    const { 
-      id, 
-      subject, 
-      start, 
-      end, 
-      location, 
-      description,
-      attendees,
-      organizer,
-      isRecurring,
-      recurrencePattern,
-      seriesId,
-      isCancelled,
-      category,
-      // Additional fields from email parsing
-      emailSubject,
-      emailFrom,
-      seriesCategory,
-    } = body;
+    const payload = await verifyToken(token, adminSecret());
+    if (payload.role !== "admin") return c.json({ error: "Invalid token" }, 401);
+    return c.json({ success: true, isAdmin: true, message: "Token is valid" });
+  } catch {
+    return c.json({ error: "Invalid or expired token" }, 401);
+  }
+});
 
-    // Validate required fields
-    if (!id || !subject || !start || !end) {
-      console.log('Missing required fields:', { id, subject, start, end });
-      return c.json({ 
-        error: 'Missing required fields: id, subject, start, end are required' 
-      }, 400);
-    }
+// Import events from email (Power Automate)
+app.post(`${BASE}/events/import-from-email`, validateApiKey, async (c) => {
+  const body = await c.req.json();
+  const {
+    id, subject, start, end,
+    location, description, attendees, organizer,
+    isRecurring, recurrencePattern, seriesId,
+    isCancelled, category, emailSubject, emailFrom, seriesCategory,
+  } = body;
 
-    // Helper function to convert string booleans to actual booleans
-    const toBool = (value: any): boolean => {
-      if (typeof value === 'boolean') return value;
-      if (typeof value === 'string') {
-        return value.toLowerCase() === 'true';
-      }
-      return !!value;
-    };
+  if (!id || !subject || !start || !end) {
+    return c.json({ error: "Missing required fields: id, subject, start, end are required" }, 400);
+  }
 
-    // Helper function to ensure datetime strings are in UTC format
-    const ensureUTC = (dateString: string): string => {
-      if (!dateString) return dateString;
-      // If the string doesn't end with 'Z' and doesn't have a timezone offset, add 'Z' to indicate UTC
-      if (!dateString.endsWith('Z') && !dateString.match(/[+-]\d{2}:\d{2}$/)) {
-        // Remove any trailing zeros after the seconds (e.g., .0000000)
-        const cleaned = dateString.replace(/\.0+$/, '');
-        return `${cleaned}Z`;
-      }
-      return dateString;
-    };
+  const eventData = {
+    id,
+    subject,
+    start: ensureUTC(start),
+    end: ensureUTC(end),
+    location: location || "",
+    description: description || "",
+    attendees: attendees || [],
+    organizer: organizer || emailFrom || "",
+    is_recurring: toBool(isRecurring),
+    recurrence_pattern: recurrencePattern || null,
+    series_id: seriesId || null,
+    is_cancelled: toBool(isCancelled),
+    category: category || seriesCategory || "General",
+    series_category: seriesCategory || null,
+    import_source: "email",
+    email_subject: emailSubject || "",
+    imported_at: new Date().toISOString(),
+  };
 
-    const eventData = {
-      id,
-      subject,
-      start: ensureUTC(start),
-      end: ensureUTC(end),
-      location: location || '',
-      description: description || '',
-      attendees: attendees || [],
-      organizer: organizer || emailFrom || '',
-      is_recurring: toBool(isRecurring),
+  const { data, error } = await supabase
+    .from("events")
+    .upsert(eventData)
+    .select()
+    .single();
+
+  if (error) return c.json({ error: `Failed to import event: ${error.message}` }, 500);
+
+  // store series reference (optional)
+  if (eventData.is_recurring && seriesId) {
+    await supabase.from("series").upsert({
+      series_id: seriesId,
       recurrence_pattern: recurrencePattern || null,
-      series_id: seriesId || null,
-      is_cancelled: toBool(isCancelled),
-      category: category || seriesCategory || 'General',
-      import_source: 'email', // Track that this came from email import
-      email_subject: emailSubject || '',
-      imported_at: new Date().toISOString()
-    };
-
-    console.log('Inserting imported event into database:', id);
-    
-    // Upsert the event (insert or update if exists)
-    const { data, error } = await supabase
-      .from('events')
-      .upsert(eventData)
-      .select()
-      .single();
-
-    if (error) {
-      console.log('Database error inserting event:', error);
-      return c.json({ 
-        error: `Failed to import event: ${error.message}` 
-      }, 500);
-    }
-
-    console.log('Event imported successfully from email:', id);
-
-    // If this is a recurring series, also store the series reference
-    if (eventData.is_recurring && seriesId) {
-      console.log('Storing series reference:', seriesId);
-      const { error: seriesError } = await supabase
-        .from('series')
-        .upsert({
-          series_id: seriesId,
-          recurrence_pattern: recurrencePattern,
-          subject,
-          import_source: 'email'
-        });
-      
-      if (seriesError) {
-        console.log('Error storing series reference:', seriesError);
-      }
-    }
-
-    return c.json({ 
-      success: true, 
-      event: dbToApi(data), 
-      message: 'Event imported successfully from email',
-      importedAt: eventData.imported_at
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error importing event from email:', err);
-    console.log('Error stack:', err.stack);
-    return c.json({ 
-      error: `Failed to import event from email: ${err.message}` 
-    }, 500);
-  }
-});
-
-// ============================================================================
-// END EMAIL IMPORT
-// ============================================================================
-
-// Add or update a calendar event from Power Automate
-app.post('/make-server-832943b5/events', validateApiKey, async (c: any) => {
-  try {
-    const body = await c.req.json();
-    console.log('Received event POST request:', JSON.stringify(body, null, 2));
-    
-    const { 
-      id, 
-      subject, 
-      start, 
-      end, 
-      location, 
-      description,
-      attendees,
-      organizer,
-      isRecurring,
-      recurrencePattern,
-      seriesId,
-      isCancelled,
-      category,
-      seriesCategory,
-    } = body;
-
-    if (!id || !subject || !start || !end) {
-      console.log('Missing required fields:', { id, subject, start, end });
-      return c.json({ 
-        error: 'Missing required fields: id, subject, start, end are required' 
-      }, 400);
-    }
-
-    // Helper function to convert string booleans to actual booleans
-    const toBool = (value: any): boolean => {
-      if (typeof value === 'boolean') return value;
-      if (typeof value === 'string') {
-        return value.toLowerCase() === 'true';
-      }
-      return !!value;
-    };
-
-    // Helper function to ensure datetime strings are in UTC format
-    const ensureUTC = (dateString: string): string => {
-      if (!dateString) return dateString;
-      if (!dateString.endsWith('Z') && !dateString.match(/[+-]\d{2}:\d{2}$/)) {
-        const cleaned = dateString.replace(/\.0+$/, '');
-        return `${cleaned}Z`;
-      }
-      return dateString;
-    };
-
-    const eventData = {
-      id,
       subject,
-      start: ensureUTC(start),
-      end: ensureUTC(end),
-      location: location || '',
-      description: description || '',
-      attendees: attendees || [],
-      organizer: organizer || '',
-      is_recurring: toBool(isRecurring),
+      import_source: "email",
+    });
+  }
+
+  return c.json({ success: true, event: dbToApi(data) });
+});
+
+// Create/update event (Power Automate)
+app.post(`${BASE}/events`, validateApiKey, async (c) => {
+  const body = await c.req.json();
+  const {
+    id, subject, start, end,
+    location, description, attendees, organizer,
+    isRecurring, recurrencePattern, seriesId,
+    isCancelled, category, seriesCategory,
+  } = body;
+
+  if (!id || !subject || !start || !end) {
+    return c.json({ error: "Missing required fields: id, subject, start, end are required" }, 400);
+  }
+
+  const eventData = {
+    id,
+    subject,
+    start: ensureUTC(start),
+    end: ensureUTC(end),
+    location: location || "",
+    description: description || "",
+    attendees: attendees || [],
+    organizer: organizer || "",
+    is_recurring: toBool(isRecurring),
+    recurrence_pattern: recurrencePattern || null,
+    series_id: seriesId || null,
+    is_cancelled: toBool(isCancelled),
+    category: category || seriesCategory || "General",
+    series_category: seriesCategory || null,
+    import_source: "powerautomate",
+    imported_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from("events")
+    .upsert(eventData)
+    .select()
+    .single();
+
+  if (error) return c.json({ error: `Failed to create/update event: ${error.message}` }, 500);
+
+  if (eventData.is_recurring && seriesId) {
+    await supabase.from("series").upsert({
+      series_id: seriesId,
       recurrence_pattern: recurrencePattern || null,
-      series_id: seriesId || null,
-      is_cancelled: toBool(isCancelled),
-      category: category || seriesCategory || 'General',
-      seriesCategory: seriesCategory || '',
-      import_source: 'powerautomate'
+      subject,
+      import_source: "powerautomate",
+    });
+  }
+
+  return c.json({ success: true, event: dbToApi(data) });
+});
+
+// Get all events (FIXED: returns data)
+app.get(`${BASE}/events`, async (c) => {
+  c.header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  c.header("Pragma", "no-cache");
+  c.header("Expires", "0");
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("*")
+    .or("is_cancelled.eq.false,is_cancelled.is.null")
+    .order("start", { ascending: true });
+
+  if (error) return c.json({ error: `Failed to fetch events: ${error.message}`, code: error.code }, 500);
+
+  return c.json({ events: (data || []).map(dbToApi) });
+});
+
+app.get(`${BASE}/events/:id`, async (c) => {
+  const id = c.req.param("id");
+  const { data, error } = await supabase.from("events").select("*").eq("id", id).single();
+  if (error) return c.json({ error: "Event not found" }, 404);
+  return c.json({ event: dbToApi(data) });
+});
+
+app.delete(`${BASE}/events/:id`, validateAdminToken, async (c) => {
+  const id = c.req.param("id");
+  const { error } = await supabase.from("events").update({ is_cancelled: true }).eq("id", id);
+  if (error) return c.json({ error: `Failed to cancel event: ${error.message}` }, 500);
+  return c.json({ success: true, message: "Event cancelled" });
+});
+
+app.patch(`${BASE}/events/:id/category`, validateAdminToken, async (c) => {
+  const id = c.req.param("id");
+  const { category } = await c.req.json();
+  const { data, error } = await supabase.from("events").update({ category }).eq("id", id).select().single();
+  if (error) return c.json({ error: `Failed to update category: ${error.message}` }, 500);
+  return c.json({ success: true, event: dbToApi(data) });
+});
+
+// (Optional) KV → DB migration endpoint: keep only if you still need it
+app.post(`${BASE}/migrate/kv-to-database`, validateAdminToken, async (c) => {
+  const kvEvents = await kv.getByPrefix("event:");
+  let migrated = 0;
+  const errors: any[] = [];
+
+  for (const event of kvEvents) {
+    const dbEvent = {
+      id: event.id,
+      subject: event.subject,
+      start: event.start,
+      end: event.end,
+      location: event.location || "",
+      description: event.description || "",
+      attendees: event.attendees || [],
+      organizer: event.organizer || "",
+      is_recurring: !!event.isRecurring,
+      recurrence_pattern: event.recurrencePattern || null,
+      series_id: event.seriesId || null,
+      is_cancelled: !!event.isCancelled,
+      category: event.category || "General",
+      series_category: event.seriesCategory || null,
+      import_source: event.importSource || "powerautomate",
+      email_subject: event.emailSubject || null,
+      imported_at: event.importedAt || null,
     };
 
-    console.log('Upserting event into database:', id);
-    
-    const { data, error } = await supabase
-      .from('events')
-      .upsert(eventData)
-      .select()
-      .single();
-
-    if (error) {
-      console.log('Database error upserting event:', error);
-      return c.json({ 
-        error: `Failed to create/update event: ${error.message}` 
-      }, 500);
-    }
-
-    console.log('Event stored successfully:', id);
-
-    // If this is a recurring series, also store the series reference
-    if (eventData.is_recurring && seriesId) {
-      console.log('Storing series reference:', seriesId);
-      const { error: seriesError } = await supabase
-        .from('series')
-        .upsert({
-          series_id: seriesId,
-          recurrence_pattern: recurrencePattern,
-          subject,
-          import_source: 'powerautomate'
-        });
-      
-      if (seriesError) {
-        console.log('Error storing series reference:', seriesError);
-      }
-    }
-
-    return c.json({ 
-      success: true, 
-      event: dbToApi(data), 
-      message: 'Event created successfully' 
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error creating/updating event:', err);
-    console.log('Error stack:', err.stack);
-    return c.json({ 
-      error: `Failed to create/update event: ${err.message}` 
-    }, 500);
+    const { error } = await supabase.from("events").upsert(dbEvent);
+    if (error) errors.push({ id: event.id, error: error.message });
+    else migrated++;
   }
-});
 
-// Get all events
-app.get('/make-server-832943b5/events', async (c: any) => {
-  try {
-c.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-c.header('Pragma', 'no-cache');
-c.header('Expires', '0');
-
-    
-    const { error } = await supabase
-      .from('events')
-      .select('*')
-      .or('is_cancelled.eq.false,is_cancelled.is.null')
-      .order('start', { ascending: true });
-
-    if (error) {
-      console.log('[GET /events] Database error:', error);
-      console.log('[GET /events] Error code:', error.code);
-      console.log('[GET /events] Error message:', error.message);
-      console.log('[GET /events] Error details:', error.details);
-      console.log('[GET /events] Error hint:', error.hint);
-      
-      // Check if table doesn't exist (PostgreSQL error)
-      if (error.code === '42P01') {
-        return c.json({ 
-          error: 'Database tables not created. Please apply the migration from /supabase/migrations/20260226000001_create_events_table.sql',
-          hint: 'Go to Supabase Dashboard → SQL Editor and run the migration file',
-          errorCode: '42P01'
-        }, 500);
-      }
-      
-      // Check if PostgREST schema cache needs refresh (Supabase API error)
-      if (error.code === 'PGRST205') {
-        return c.json({ 
-          error: 'Table not found in Supabase schema cache. Please apply the migration and reload the schema.',
-          hint: 'Go to Supabase Dashboard → SQL Editor, run the migration, then go to API Settings → Schema Cache and click "Reload schema"',
-          errorCode: 'PGRST205',
-          instructions: [
-            '1. Go to Supabase Dashboard → SQL Editor',
-            '2. Run the migration from /supabase/migrations/20260226000001_create_events_table.sql',
-            '3. Go to Settings → API → Reload Schema (or wait 24 hours for auto-refresh)'
-          ]
-        }, 500);
-      }
-      
-      return c.json({ 
-        error: `Failed to fetch events: ${error.message}`,
-        details: error.details,
-        hint: error.hint,
-        code: error.code
-      }, 500);
-    }
-
-    console.log(`[GET /events] Retrieved ${data?.length || 0} events from database`);
-
-    // Convert all events from snake_case to camelCase
-    const events = (data || []).map(dbToApi);
-
-    return c.json({ events });
-  } catch (error) {
-    const err = error as Error;
-    console.log('[GET /events] Exception caught:', err);
-    console.log('[GET /events] Error message:', err.message);
-    console.log('[GET /events] Error stack:', err.stack);
-    return c.json({ 
-      error: `Failed to fetch events: ${err.message}`,
-      stack: err.stack
-    }, 500);
-  }
-});
-
-// Get a specific event
-app.get('/make-server-832943b5/events/:id', async (c: any) => {
-  try {
-    const id = c.req.param('id');
-    console.log('Fetching event:', id);
-    
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return c.json({ error: 'Event not found' }, 404);
-      }
-      console.log('Database error fetching event:', error);
-      return c.json({ 
-        error: `Failed to fetch event: ${error.message}` 
-      }, 500);
-    }
-
-    return c.json({ event: dbToApi(data) });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error fetching event:', err);
-    return c.json({ 
-      error: `Failed to fetch event: ${err.message}` 
-    }, 500);
-  }
-});
-
-// Delete an event (or mark as cancelled) - ADMIN ONLY
-app.delete('/make-server-832943b5/events/:id', validateAdminToken, async (c: any) => {
-  try {
-    const id = c.req.param('id');
-    console.log('Marking event as cancelled:', id);
-    
-    // Mark as cancelled rather than deleting
-    const { data, error } = await supabase
-      .from('events')
-      .update({ is_cancelled: true })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return c.json({ error: 'Event not found' }, 404);
-      }
-      console.log('Database error cancelling event:', error);
-      return c.json({ 
-        error: `Failed to cancel event: ${error.message}` 
-      }, 500);
-    }
-
-    console.log('Event cancelled successfully:', id);
-    return c.json({ success: true, message: 'Event cancelled' });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error cancelling event:', err);
-    return c.json({ 
-      error: `Failed to cancel event: ${err.message}` 
-    }, 500);
-  }
-});
-
-// Update event category - ADMIN ONLY
-app.patch('/make-server-832943b5/events/:id/category', validateAdminToken, async (c: any) => {
-  try {
-    const id = c.req.param('id');
-    const body = await c.req.json();
-    const { category } = body;
-
-    console.log(`Updating category for event ${id} to:`, category);
-
-    const { data, error } = await supabase
-      .from('events')
-      .update({ category })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return c.json({ error: 'Event not found' }, 404);
-      }
-      console.log('Database error updating category:', error);
-      return c.json({ 
-        error: `Failed to update event category: ${error.message}` 
-      }, 500);
-    }
-
-    console.log('Event category updated successfully:', id);
-    return c.json({ 
-      success: true, 
-      event: dbToApi(data), 
-      message: 'Category updated successfully' 
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error updating event category:', err);
-    return c.json({ 
-      error: `Failed to update event category: ${err.message}` 
-    }, 500);
-  }
-});
-
-// Get events by series
-app.get('/make-server-832943b5/series/:seriesId/events', async (c: any) => {
-  try {
-    const seriesId = c.req.param('seriesId');
-    console.log('Fetching events for series:', seriesId);
-    
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('series_id', seriesId)
-      .eq('is_cancelled', false)
-      .order('start', { ascending: true });
-
-    if (error) {
-      console.log('Database error fetching series events:', error);
-      return c.json({ 
-        error: `Failed to fetch series events: ${error.message}` 
-      }, 500);
-    }
-
-    const events = data.map(dbToApi);
-    return c.json({ events });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error fetching series events:', err);
-    return c.json({ 
-      error: `Failed to fetch series events: ${err.message}` 
-    }, 500);
-  }
-});
-
-// ============================================================================
-// DATABASE MIGRATION ENDPOINTS
-// ============================================================================
-
-// Migrate data from KV store to Supabase database - ADMIN ONLY
-app.post('/make-server-832943b5/migrate/kv-to-database', validateAdminToken, async (c: any) => {
-  try {
-    console.log('Starting KV to database migration...');
-    
-    // Get all events from KV store
-    const kvEvents = await kv.getByPrefix('event:');
-    let migratedCount = 0;
-    let errorCount = 0;
-    const errors: any[] = [];
-    
-    console.log(`Found ${kvEvents.length} events in KV store`);
-    
-    for (const event of kvEvents) {
-      try {
-        const dbEvent = {
-          id: event.id,
-          subject: event.subject,
-          start: event.start,
-          end: event.end,
-          location: event.location || '',
-          description: event.description || '',
-          attendees: event.attendees || [],
-          organizer: event.organizer || '',
-          is_recurring: event.isRecurring || false,
-          recurrence_pattern: event.recurrencePattern || null,
-          series_id: event.seriesId || null,
-          is_cancelled: event.isCancelled || false,
-          category: event.category || '',
-          import_source: event.importSource || 'powerautomate',
-          email_subject: event.emailSubject || null,
-          imported_at: event.importedAt || null
-        };
-        
-        const { error } = await supabase
-          .from('events')
-          .upsert(dbEvent);
-        
-        if (error) {
-          console.log('Error migrating event:', event.id, error.message);
-          errorCount++;
-          errors.push({ id: event.id, error: error.message });
-        } else {
-          migratedCount++;
-          console.log('Migrated event:', event.id);
-        }
-      } catch (err) {
-        const e = err as Error;
-        console.log('Exception migrating event:', event.id, e.message);
-        errorCount++;
-        errors.push({ id: event.id, error: e.message });
-      }
-    }
-    
-    console.log(`Migration complete: ${migratedCount} succeeded, ${errorCount} failed`);
-    
-    return c.json({
-      success: true,
-      message: `Migrated ${migratedCount} events from KV to database`,
-      migratedCount,
-      errorCount,
-      errors: errors.length > 0 ? errors : undefined
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error during migration:', err);
-    return c.json({
-      error: `Migration failed: ${err.message}`
-    }, 500);
-  }
-});
-
-// Fix existing events with string booleans (legacy endpoint, now runs on database)
-app.post('/make-server-832943b5/migrate/fix-booleans', async (c: any) => {
-  try {
-    // This endpoint is now deprecated since database handles types correctly
-    return c.json({ 
-      success: true, 
-      message: 'No migration needed - database uses proper types',
-      note: 'This endpoint is deprecated. The database handles boolean types correctly.'
-    });
-  } catch (error) {
-    const err = error as Error;
-    console.log('Error in migration endpoint:', err);
-    return c.json({ 
-      error: `Migration endpoint error: ${err.message}` 
-    }, 500);
-  }
+  return c.json({ success: true, migratedCount: migrated, errorCount: errors.length, errors: errors.length ? errors : undefined });
 });
 
 Deno.serve(app.fetch);
