@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { toast } from 'sonner';
 import { Toaster } from './components/ui/sonner';
 import { Calendar, List, Settings, RefreshCw } from 'lucide-react';
-import { projectId, publicAnonKey } from '../utils/supabase/info';
+import { projectId, publicAnonKey } from '../utils/supabase/index';
 import { EVENT_CATEGORIES } from './config/categories';
 
 interface CalendarEvent {
